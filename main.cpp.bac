@@ -1,0 +1,116 @@
+#include <cstdio>
+#include <pcap.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <string.h>
+#include "ethhdr.h"
+#include "arphdr.h"
+
+#pragma pack(push, 1)
+struct EthArpPacket final {
+	EthHdr eth_;
+	ArpHdr arp_;
+};
+#pragma pack(pop)
+
+void usage() {
+	printf("syntax: get-mac-address <interface>\n");
+	printf("sample: get-mac-address wlan0\n");
+}
+
+// Function to get the MAC address
+unsigned char* getMAC(char *iface) {
+	int fd;
+	struct ifreq ifr;
+	unsigned char *mac = NULL;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+	if (fd < 0) {
+		perror("Cannot open socket");
+		return NULL;
+	}
+
+	strncpy(ifr.ifr_name, iface, IFNAMSIZ-1);
+
+	if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
+		perror("ioctl");
+		return NULL;
+	}
+
+	mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+
+	close(fd);
+
+	return mac;
+}
+
+int main(int argc, char* argv[]) {
+	if (argc != 2) {
+		usage();
+		return -1;
+	}
+
+	// Get the MAC address of the interface and print it
+	unsigned char* mac = getMAC(argv[1]);
+	if(mac != NULL) {
+		printf("MAC Address of %s: %02X:%02X:%02X:%02X:%02X:%02X\n", argv[1], mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+	}
+
+	char* dev = argv[1];
+	char errbuf[PCAP_ERRBUF_SIZE];
+	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1, errbuf);
+
+	if (handle == nullptr) {
+		fprintf(stderr, "couldn't open device %s(%s)\n", dev, errbuf);
+		return -1;
+	}
+
+	EthArpPacket packet;
+
+	// Send an ARP Request
+	packet.eth_.dmac_ = Mac("FF:FF:FF:FF:FF:FF"); // Broadcast MAC Address
+	packet.eth_.smac_ = Mac("00:0c:29:4f:ef:35"); // Source MAC Address
+	packet.eth_.type_ = htons(EthHdr::Arp);
+
+	packet.arp_.hrd_ = htons(ArpHdr::ETHER);
+	packet.arp_.pro_ = htons(EthHdr::Ip4);
+	packet.arp_.hln_ = Mac::SIZE;
+	packet.arp_.pln_ = Ip::SIZE;
+	packet.arp_.op_ = htons(ArpHdr::Request); // Request
+	packet.arp_.smac_ = Mac("00:0c:29:4f:ef:35"); // Source MAC Address
+	packet.arp_.sip_ = htonl(Ip("191.168.204.128")); // Source IP Address
+	packet.arp_.tmac_ = Mac("00:00:00:00:00:00"); // Target MAC Address
+	packet.arp_.tip_ = htonl(Ip("8.8.8.8")); // Target IP Address
+
+	int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
+
+	if (res != 0) {
+		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
+	}
+
+	// Listen for ARP Reply
+	while (true) {
+		struct pcap_pkthdr* header;
+		const u_char* reply_packet;
+		int result = pcap_next_ex(handle, &header, &reply_packet);
+		if (result != 1) {
+			continue;
+		}
+
+		EthArpPacket* reply = (EthArpPacket*)reply_packet;
+
+		if (ntohs(reply->eth_.type_) == EthHdr::Arp && ntohs(reply->arp_.op_) == ArpHdr::Reply &&
+				reply->arp_.sip_ == packet.arp_.tip_ && reply->arp_.tip_ == packet.arp_.sip_) {
+			printf("Found target MAC address: %s\n", std::string(reply->arp_.smac_).c_str());
+			break;
+		}
+	}
+
+	pcap_close(handle);
+
+	return 0;
+}
+

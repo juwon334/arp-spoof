@@ -1,0 +1,102 @@
+#include <cstdio>
+#include <pcap.h>
+#include <netinet/in.h>
+#include <netinet/if_ether.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <string.h>
+
+void usage() {
+	printf("syntax: arp-spoof <interface> <target ip>\n");
+	printf("sample: arp-spoof eth0 192.168.1.1\n");
+}
+
+int main(int argc, char* argv[]) {
+
+	char* dev = argv[1];
+	char* target_ip = argv[2];
+	char errbuf[PCAP_ERRBUF_SIZE];
+	pcap_t* handle;
+	bpf_u_int32 mask;
+	bpf_u_int32 net;
+	struct pcap_pkthdr header;
+	const u_char *packet;
+	struct ether_header *eptr;  /* net/ethernet.h */
+	struct ether_arp *arp_hdr;  /* net/ethernet.h */
+
+	if (pcap_lookupnet(dev, &net, &mask, errbuf) == -1) {
+		fprintf(stderr, "Can't get netmask for device %s\n", dev);
+		net = 0;
+		mask = 0;
+	}
+
+	handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+	if (handle == NULL) {
+		fprintf(stderr, "Couldn't open device %s: %s\n", dev, errbuf);
+		return(2);
+	}
+
+	// Get MAC address
+	int fd;
+	struct ifreq ifr;
+	char *iface = argv[1];
+	unsigned char *mac;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+	ifr.ifr_addr.sa_family = AF_INET;
+	strncpy(ifr.ifr_name, iface, IFNAMSIZ-1);
+
+	ioctl(fd, SIOCGIFHWADDR, &ifr);
+
+	close(fd);
+
+	mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+
+	printf("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+	// Prepare for ARP request
+	u_char arp_req[sizeof(struct ether_header) + sizeof(struct ether_arp)];
+	eptr = (struct ether_header *) arp_req;
+	arp_hdr = (struct ether_arp *)(arp_req + sizeof(struct ether_header));
+
+	// Set Ethernet header
+	memcpy(eptr->ether_shost, mac, ETHER_ADDR_LEN);
+	memset(eptr->ether_dhost, 0xff, ETHER_ADDR_LEN);
+	eptr->ether_type = htons(ETHERTYPE_ARP);
+
+	// Set ARP header
+	arp_hdr->arp_hrd = htons(ARPHRD_ETHER);
+	arp_hdr->arp_pro = htons(ETHERTYPE_IP);
+	arp_hdr->arp_hln = ETHER_ADDR_LEN;
+	arp_hdr->arp_pln = sizeof(in_addr_t);
+	arp_hdr->arp_op = htons(ARPOP_REQUEST);
+	memcpy(arp_hdr->arp_sha, mac, ETHER_ADDR_LEN);
+	inet_pton(AF_INET, target_ip, arp_hdr->arp_spa);
+	memset(arp_hdr->arp_tha, 0x00, ETHER_ADDR_LEN);
+	inet_pton(AF_INET, target_ip, arp_hdr->arp_tpa);
+
+	// Send ARP request
+	if (pcap_sendpacket(handle, arp_req, sizeof(arp_req)) == -1)
+		fprintf(stderr, "\nError sending the packet: \n", pcap_geterr(handle));
+
+	// Listen for ARP reply
+	while (true) {
+		packet = pcap_next(handle, &header);
+		eptr = (struct ether_header *) packet;
+		if (ntohs(eptr->ether_type) == ETHERTYPE_ARP) {
+			arp_hdr = (struct ether_arp *)(packet + sizeof(struct ether_header));
+			if (ntohs(arp_hdr->arp_op) == ARPOP_REPLY) {
+				printf("Target MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+						arp_hdr->arp_sha[0], arp_hdr->arp_sha[1], arp_hdr->arp_sha[2],
+						arp_hdr->arp_sha[3], arp_hdr->arp_sha[4], arp_hdr->arp_sha[5]);
+				break;
+			}
+		}
+	}
+
+	pcap_close(handle);
+	return 0;
+}
+
