@@ -147,7 +147,7 @@ int attack(char *inface, char *sender_ip, char *target_ip){
 
 		if ((ntohs(eth_hdr->ether_type) == 0x0806))
 		{
-			fprintf(stderr,"tlqkf\n");
+			
 			EthArpPacket *tmp_eth = (EthArpPacket *)(re_packet);
 			if (tmp_eth->arp_.tip_ == Ip(htonl(Ip(target_ip))) && (tmp_eth->arp_.op_ == htons(ArpHdr::Request)))
 			{	
