@@ -43,7 +43,7 @@ void getIP(char *iface, char *ip) {
 	strcpy(ip, inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
 }
 
-int process_ip_pair(char *inface, char *sender_ip, char *target_ip){
+int attack(char *inface, char *sender_ip, char *target_ip){
 	char errbuf[PCAP_ERRBUF_SIZE];
 	pcap_t* handle = pcap_open_live(inface, BUFSIZ, 1, 1, errbuf);
 	char Smac[18];
@@ -167,7 +167,7 @@ int main(int argc, char* argv[]) {
 	for(int i =2;i<argc;i+=2){
 		pid_t pid = fork();
 		if(pid == 0){
-			process_ip_pair(iface, argv[i],argv[i+1]);
+			attack(iface, argv[i],argv[i+1]);
 			exit(0);
 		}
 		else if(pid <0){
